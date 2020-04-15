@@ -15,10 +15,12 @@ dependencies:
   - python=3
   - ipykernel
   - boto3
-  - tqdm  
+  - tqdm
   - numpy
   - scipy
   - pandas
   - rasterio
   - shapely
   - geopandas
+  - contextily
+  - descartes
