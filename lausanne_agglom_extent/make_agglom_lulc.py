@@ -5,34 +5,14 @@ import geopandas as gpd
 import numpy as np
 import rasterio as rio
 import urban_footprinter as ufp
-from rasterio import features, transform, windows
+from rasterio import features, windows
 from scipy import ndimage as ndi
 from shapely import geometry
 
-# ugly hardcoded values extracted from the Swiss GMB agglomeration boundaries
-WEST, SOUTH, EAST, NORTH = (2512518, 1146825, 2558887, 1177123)
-
-# ugly hardcoded CRS to avoid issues with pyproj versions
-CRS = 'epsg:2056'
-
-# lulc column in Vaud's cadastre shapefile
-CADASTRE_LULC_COLUMN = 'GENRE'
-
-# other lulc values
-URBAN_CLASSES = list(range(8))
-LULC_WATER_VAL = 14
+from lausanne_agglom_extent import utils
 
 # sieve to clean isolated land pixels in the lake
 SIEVE_SIZE = 10
-
-
-def lausanne_reclassify(value, dst_nodata_val):
-    if value < 0:
-        return dst_nodata_val
-    if value >= 9:
-        return value - 1
-    else:
-        return value
 
 
 @click.command()
@@ -44,37 +24,22 @@ def lausanne_reclassify(value, dst_nodata_val):
 @click.option('--kernel-radius', type=int, default=500, required=False)
 @click.option('--urban-threshold', type=float, default=.15, required=False)
 @click.option('--buffer-dist', type=int, default=1000, required=False)
-@click.option('--dst-nodata-val', type=int, default=255, required=False)
+@click.option('--dst-nodata', type=int, default=255, required=False)
 def main(cadastre_filepath, dst_tif_filepath, dst_shp_filepath, dst_res,
-         num_patches, kernel_radius, urban_threshold, buffer_dist,
-         dst_nodata_val):
+         num_patches, kernel_radius, urban_threshold, buffer_dist, dst_nodata):
     logger = logging.getLogger(__name__)
     logger.info("preparing raster agglomeration LULC from %s",
                 cadastre_filepath)
 
-    cadastre_transform = transform.from_origin(WEST + dst_res // 2,
-                                               NORTH - dst_res // 2, dst_res,
-                                               dst_res)
-    cadastre_gdf = gpd.read_file(cadastre_filepath,
-                                 bbox=(WEST, SOUTH, EAST, NORTH))
-    cadastre_ser = cadastre_gdf[CADASTRE_LULC_COLUMN].apply(
-        lausanne_reclassify, args=(dst_nodata_val, ))
-
-    cadastre_shape = ((NORTH - SOUTH) // dst_res, (EAST - WEST) // dst_res)
-    cadastre_arr = features.rasterize(
-        ((geom, value)
-         for geom, value in zip(cadastre_gdf['geometry'], cadastre_ser)),
-        out_shape=cadastre_shape,
-        fill=dst_nodata_val,
-        transform=cadastre_transform,
-        dtype=np.uint8)
+    cadastre_arr, cadastre_transform = utils.rasterize_cadastre(
+        cadastre_filepath, dst_res, dst_nodata)
     logger.info("rasterized cadastre vector LULC dataset to shape %s",
-                str(cadastre_shape))
+                str(cadastre_arr.shape))
 
     # get the urban extent mask according to the criteria used in the "Atlas
     # of Urban Expansion, The 2016 Edition" by Angel, S. et al.
     uf = ufp.UrbanFootprinter(cadastre_arr,
-                              urban_classes=URBAN_CLASSES,
+                              urban_classes=utils.URBAN_CLASSES,
                               res=dst_res)
     urban_mask = uf.compute_footprint_mask(kernel_radius,
                                            urban_threshold,
@@ -86,7 +51,7 @@ def main(cadastre_filepath, dst_tif_filepath, dst_shp_filepath, dst_res,
 
     # exclude lake
     # TODO: arguments to customize `LULC_WATER_VAL` and `SIEVE_SIZE`
-    label_arr = ndi.label(cadastre_arr == LULC_WATER_VAL,
+    label_arr = ndi.label(cadastre_arr == utils.LULC_WATER_VAL,
                           ndi.generate_binary_structure(2, 2))[0]
     cluster_label = np.argmax(np.unique(label_arr,
                                         return_counts=True)[1][1:]) + 1
@@ -99,7 +64,7 @@ def main(cadastre_filepath, dst_tif_filepath, dst_shp_filepath, dst_res,
     extent_window = windows.get_data_window(urban_mask, nodata=0)
     extent_transform = windows.transform(extent_window, cadastre_transform)
     dst_arr = np.where(urban_mask, cadastre_arr,
-                       dst_nodata_val)[windows.window_index(extent_window)]
+                       dst_nodata)[windows.window_index(extent_window)]
 
     # dump it
     # ACHTUNG: use hardcoded CRS string (for the same CRS) to avoid issues
@@ -110,10 +75,10 @@ def main(cadastre_filepath, dst_tif_filepath, dst_shp_filepath, dst_res,
             width=extent_window.width,
             height=extent_window.height,
             count=1,
-            crs=CRS,  # cadastre_gdf.crs
+            crs=utils.CRS,  # cadastre_gdf.crs
             transform=extent_transform,
             dtype=np.uint8,
-            nodata=dst_nodata_val) as dst:
+            nodata=dst_nodata) as dst:
         dst.write(dst_arr, 1)
     logger.info("dumped rasterized dataset to %s", dst_tif_filepath)
 
@@ -129,7 +94,7 @@ def main(cadastre_filepath, dst_tif_filepath, dst_shp_filepath, dst_res,
         #     transform=extent_transform)
         urban_mask_geom = geometry.shape(
             max([(geom, val) for geom, val in features.shapes(
-                np.array(dst_arr != dst_nodata_val, dtype=np.uint8),
+                np.array(dst_arr != dst_nodata, dtype=np.uint8),
                 transform=extent_transform) if val == 1],
                 key=lambda geom: len(geom[0]['coordinates']))[0])
 
@@ -147,7 +112,7 @@ def main(cadastre_filepath, dst_tif_filepath, dst_shp_filepath, dst_res,
 
         # ACHTUNG: use hardcoded CRS string (for the same CRS) to avoid issues
         gpd.GeoSeries([urban_mask_geom, lake_mask_geom],
-                      crs=CRS).to_file(dst_shp_filepath)
+                      crs=utils.CRS).to_file(dst_shp_filepath)
         logger.info("dumped extent geometry to %s", dst_shp_filepath)
 
 

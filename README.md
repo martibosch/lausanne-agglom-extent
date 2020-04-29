@@ -4,7 +4,7 @@
 
 Obtention of the spatial extent of the agglomeration of Lausanne with the [Urban footprinter](https://github.com/martibosch/urban-footprinter), which implements the methods proposed in the [Atlas of Urban Expansion](http://atlasofurbanexpansion.org/). More precisely, in this repository, a pixel is considered part of the urban extent when at least 15\% of the pixels that surround it (with a 500m radius) are of urban land use.
 
-![Figure](reports/figures/agglom-extent.png)
+![Figure](reports/figures/spatial-extent.pdf)
 
 ## Note about the reproducibility of this computational workflow
 
